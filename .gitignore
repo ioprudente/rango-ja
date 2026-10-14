@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Ambientes
+.venv/
+venv/
+env/
+
+# Variáveis de ambiente (segredos)
+.env
+
+# IDE
+.vscode/
+.idea/
+
+# Sistema
+.DS_Store

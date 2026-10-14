@@ -1,0 +1,23 @@
+# Ambientes virtuais locais
+.venv/
+venv/
+env/
+
+# Caches do Python e testes
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Configurações de IDEs
+.vscode/
+.idea/
+
+# Controle de versão
+.git
+.gitignore
+.dockerignore
+README.md

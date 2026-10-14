@@ -1,0 +1,17 @@
+version: '3.8'
+
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: fastapi_poetry_app
+    ports:
+      - "8000:8000"
+    volumes:
+      # Sincroniza sua pasta src local com o container
+      - ./src:/app/src
+    environment:
+      - ENV=development
+    # Sobrescreve o comando do Dockerfile para usar o --reload durante o desenvolvimento
+    command: poetry run uvicorn src.meu_projeto.main:app --host 0.0.0.0 --port 8000 --reload
