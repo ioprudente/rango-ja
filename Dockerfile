@@ -30,4 +30,4 @@ RUN poetry install --no-interaction --no-ansi --no-root --only main
 COPY src/ ./src/
 
 # 9. Comando para rodar o FastAPI dentro do container
-CMD ["poetry", "run", "uvicorn", "src.meu_projeto.main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["poetry", "run", "uvicorn", "src/rango_ja.main:app", "--host", "0.0.0.0", "--port", "8000"]
