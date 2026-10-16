@@ -7,8 +7,13 @@ from fastapi.responses import JSONResponse
 
 from rango_ja.actions.base import ActionLog, ActionRecord
 from rango_ja.agent.base import AgentOrchestrator
-from rango_ja.config import Settings, get_settings
-from rango_ja.dependencies import ActionsDep, AgentDep, MemoryDep
+from rango_ja.config import get_settings
+from rango_ja.dependencies import (
+    ActionsDep,
+    AgentDep,
+    MemoryDep,
+    get_order_repository,
+)
 from rango_ja.memory.base import MemoryStore, Message
 from rango_ja.schemas import ChatRequest, ChatResponse, HealthResponse
 
@@ -20,12 +25,14 @@ logging.basicConfig(level=logging.INFO)
 async def lifespan(app: FastAPI):
     settings = get_settings()
     logger.info(
-        "startup llm=%s model=%s pedidos=%s politicas=%s",
+        "startup llm=%s model=%s orders=%s policies=%s",
         settings.llm_provider,
         settings.llm_model,
-        settings.pedidos_path,
-        settings.politicas_path,
+        settings.orders_path,
+        settings.policies_path,
     )
+    repo = get_order_repository()
+    logger.info("orders loaded at startup: %d", len(repo.all()))
     yield
     logger.info("shutdown")
 
@@ -38,7 +45,7 @@ app = FastAPI(
 
 
 @app.get("/health", response_model=HealthResponse)
-async def health(settings: Settings = Depends(get_settings)) -> HealthResponse:
+async def health(settings=Depends(get_settings)) -> HealthResponse:
     return HealthResponse(
         llm_provider=settings.llm_provider,
         llm_model=settings.llm_model,
@@ -52,23 +59,20 @@ async def health(settings: Settings = Depends(get_settings)) -> HealthResponse:
 )
 async def chat(
     payload: ChatRequest,
-    settings: Settings = Depends(get_settings),
     agent: AgentOrchestrator = AgentDep,
     memory: MemoryStore = MemoryDep,
     actions: ActionLog = ActionsDep,
 ) -> ChatResponse:
-    # 1) Persistir a mensagem do usuário antes de agir.
     await memory.append(
         payload.session_id,
-        Message(role="user", content=payload.mensagem),
+        Message(role="user", content=payload.message),
     )
 
-    # 2) Delegar ao orquestrador (LLM + ferramentas + regras de negócio).
     try:
-        resposta = await agent.handle(
-            cliente_id=payload.cliente_id,
+        response = await agent.handle(
+            customer_id=payload.customer_id,
             session_id=payload.session_id,
-            mensagem=payload.mensagem,
+            message=payload.message,
         )
     except TimeoutError:
         raise HTTPException(
@@ -82,22 +86,21 @@ async def chat(
             detail="Falha ao processar a mensagem.",
         )
 
-    # 3) Registrar resposta + ações executadas.
     await memory.append(
         payload.session_id,
-        Message(role="assistant", content=resposta.resposta),
+        Message(role="assistant", content=response.answer),
     )
-    for acao in resposta.acoes:
+    for action in response.actions:
         await actions.record(
             ActionRecord(
                 session_id=payload.session_id,
-                cliente_id=payload.cliente_id,
-                acao=acao,
-                registrado_em=datetime.now(timezone.utc),
+                customer_id=payload.customer_id,
+                action=action,
+                recorded_at=datetime.now(timezone.utc),
             )
         )
 
-    return resposta
+    return response
 
 
 @app.exception_handler(ValueError)
