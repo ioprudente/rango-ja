@@ -1,169 +1,80 @@
 from datetime import datetime, timedelta
 
-from pydantic import BaseModel
-
-from rango_ja.config import Settings
+from rango_ja.config import Settings, get_settings
 from rango_ja.domain.errors import (
+    ClaimOutOfTimeframe,
     DuplicateRefund,
-    InvalidStatus,
-    ItemNotFound,
-    OrderNotAccessible,
-    OrderNotFound,
-    OutsideClaimWindow,
+    ItemNotFoundInOrder,
+    UnsupportedReason,
+    ValueExceedsLimit,
 )
-from rango_ja.domain.models import (
-    BR_TZ,
-    REFUND_STATUS_APPROVED,
-    REFUND_STATUS_ESCALATED,
-    STATUS_CANCELLED_BY_RESTAURANT,
-    Order,
-    Refund,
-)
-from rango_ja.domain.repository import OrderRepository
-
-# Valores de "motivo" usados no pedidos.json e nas ferramentas.
-REASON_DELAY = "atraso"
-REASON_MISSING_ITEM = "item_faltante"
-REASON_RESTAURANT_CANCEL = "cancelado_restaurante"
-
-VALID_REASONS = {
-    REASON_DELAY,
-    REASON_MISSING_ITEM,
-    REASON_RESTAURANT_CANCEL,
-}
+from rango_ja.domain.models import Order, RefundReason
 
 
-class RefundDecision(BaseModel):
-    approved: bool
-    amount: float
-    reason: str
-    escalate_to_human: bool = False
+class RefundResult:
+    def __init__(self, value: float, approved: bool, reason: RefundReason) -> None:
+        self.value = value
+        self.approved = approved
+        self.reason = reason
 
 
-class RefundCalculator:
-    """Calcula o valor do reembolso com base nas políticas.
+def _reference_now(settings: Settings) -> datetime:
+    return datetime.fromisoformat(settings.reference_datetime).replace(tzinfo=None)
 
-    Regras (sempre aplicadas pelo código, nunca pelo LLM):
-      - atraso > 30 min em relação ao previsto: 20% do total
-      - item faltante: valor daquele item
-      - cancelado pelo restaurante: valor total
-    """
 
-    def __init__(self, settings: Settings) -> None:
-        self._settings = settings
+def _validate_timeframe(order: Order, settings: Settings) -> None:
+    if order.entregue_em is None:
+        return
+    
+    now = _reference_now(settings)
+    limit = order.entregue_em + timedelta(days=settings.claim_window_days)
+    if now > limit:
+        raise ClaimOutOfTimeframe(order.pedido_id)
 
-    def calculate(
-        self, order: Order, reason: str, item: str | None = None
-    ) -> float:
-        if reason == REASON_DELAY:
-            return self._delay(order)
-        if reason == REASON_MISSING_ITEM:
-            return self._missing_item(order, item)
-        if reason == REASON_RESTAURANT_CANCEL:
-            return self._restaurant_cancel(order)
-        raise InvalidStatus(f"Motivo inválido: {reason!r}")
 
-    def _delay(self, order: Order) -> float:
-        if order.delivered_at is None:
-            raise InvalidStatus("Pedido ainda não foi entregue.")
-        delta = order.delivered_at - order.estimated_at
-        threshold = timedelta(minutes=self._settings.delay_threshold_minutes)
-        if delta <= threshold:
-            raise InvalidStatus("Pedido não ultrapassou o limite de atraso.")
-        return round(order.total * self._settings.delay_refund_percent, 2)
+def _calculate_delay_minutes(order: Order) -> float:
+    if order.entregue_em is None or order.previsto_para is None:
+        return 0.0
+    delta = order.entregue_em - order.previsto_para
+    return delta.total_seconds() / 60.0
 
-    def _missing_item(self, order: Order, item_name: str | None) -> float:
+
+def calculate_refund(
+    order: Order,
+    reason: RefundReason,
+    item_name: str | None = None,
+    settings: Settings | None = None,
+) -> RefundResult:
+    settings = settings or get_settings()
+
+    if order.has_refund():
+        raise DuplicateRefund(order.pedido_id)
+
+    _validate_timeframe(order, settings)
+
+    value = 0.0
+
+    if reason is RefundReason.DELAY:
+        minutes = _calculate_delay_minutes(order)
+        if minutes <= settings.delay_threshold_minutes:
+            return RefundResult(value=0.0, approved=False, reason=reason)
+        value = round(order.total * settings.delay_refund_percent, 2)
+
+    elif reason is RefundReason.MISSING_ITEM:
         if not item_name:
-            raise ItemNotFound("Informe o nome do item faltante.")
-        target = item_name.strip().lower()
-        for item in order.items:
-            if item.name.lower() == target:
-                return round(item.price, 2)
-        raise ItemNotFound(f"Item {item_name!r} não consta no pedido.")
+            raise UnsupportedReason("item_faltante exige o nome do item.")
+        item = order.get_item_by_name(item_name)
+        if item is None:
+            raise ItemNotFoundInOrder(order.pedido_id, item_name)
+        value = round(item.preco, 2)
 
-    def _restaurant_cancel(self, order: Order) -> float:
-        if order.status != STATUS_CANCELLED_BY_RESTAURANT:
-            raise InvalidStatus("Pedido não foi cancelado pelo restaurante.")
-        return round(order.total, 2)
+    elif reason is RefundReason.RESTAURANT_CANCELLATION:
+        value = round(order.total, 2)
 
+    else:
+        raise UnsupportedReason(str(reason))
 
-class RefundService:
-    """Orquestra posse, prazo, cálculo e registro do reembolso.
+    if value > settings.max_refund_auto:
+        raise ValueExceedsLimit(value, settings.max_refund_auto)
 
-    Não compõe texto para o cliente: isso é responsabilidade da camada
-    de ferramentas / orquestrador.
-    """
-
-    def __init__(self, settings: Settings, repository: OrderRepository) -> None:
-        self._settings = settings
-        self._repository = repository
-        self._calculator = RefundCalculator(settings)
-
-        reference = datetime.fromisoformat(settings.reference_datetime)
-        if reference.tzinfo is None:
-            reference = reference.replace(tzinfo=BR_TZ)
-        self._reference = reference
-
-    def request(
-        self,
-        *,
-        customer_id: str,
-        order_id: str,
-        reason: str,
-        item: str | None = None,
-    ) -> RefundDecision:
-        if reason not in VALID_REASONS:
-            raise InvalidStatus(f"Motivo inválido: {reason!r}")
-
-        order = self._repository.get(order_id)
-        if order is None:
-            raise OrderNotFound(f"Pedido {order_id!r} não encontrado.")
-        if order.customer_id != customer_id:
-            # Não revelar a distinção "não existe" vs "é de outro cliente".
-            raise OrderNotAccessible(
-                f"Pedido {order_id!r} não está disponível para esse cliente."
-            )
-
-        if order.refunds:
-            raise DuplicateRefund(
-                f"Pedido {order_id!r} já possui uma solicitação registrada."
-            )
-
-        self._check_claim_window(order)
-
-        amount = self._calculator.calculate(order, reason, item)
-        approved = amount <= self._settings.max_refund_auto
-
-        order.refunds.append(
-            Refund(
-                amount=amount,
-                reason=reason,
-                created_at=self._reference,
-                status=(
-                    REFUND_STATUS_APPROVED if approved else REFUND_STATUS_ESCALATED
-                ),
-            )
-        )
-
-        return RefundDecision(
-            approved=approved,
-            amount=amount,
-            reason=reason,
-            escalate_to_human=not approved,
-        )
-
-    def _check_claim_window(self, order: Order) -> None:
-        # A reclamação deve ocorrer em até 7 dias após o evento:
-        # entrega (atraso / item faltante) ou cancelamento.
-        if order.status == STATUS_CANCELLED_BY_RESTAURANT:
-            base = order.cancelled_at
-        else:
-            base = order.delivered_at
-        if base is None:
-            return
-        deadline = base + timedelta(days=self._settings.claim_window_days)
-        if self._reference > deadline:
-            raise OutsideClaimWindow(
-                f"Prazo de reclamação ({self._settings.claim_window_days} dias) "
-                f"encerrado."
-            )
+    return RefundResult(value=value, approved=True, reason=reason)
