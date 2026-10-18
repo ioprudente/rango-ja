@@ -11,12 +11,15 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    # LLM (Gemini)
-    llm_provider: str = "gemini"
-    llm_api_key: str = ""
-    llm_model: str = "gemini-1.5-flash"
-    llm_timeout_seconds: float = 30.0
+    # LLM (Ollama Local)
+    llm_provider: str = "ollama"
+    llm_api_key: str = "nao_precisa"
+    llm_model: str = "llama3.2:3b"
+    llm_timeout_seconds: float = 120.0
     llm_max_retries: int = 2
+    
+    # URL do Ollama (permite configurar para Docker: http://host.docker.internal:11434)
+    ollama_url: str = "http://localhost:11434"
 
     # Agente
     max_agent_iterations: int = Field(default=6, ge=1, le=20)

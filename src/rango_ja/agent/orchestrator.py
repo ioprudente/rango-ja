@@ -15,8 +15,8 @@ class OllamaOrchestrator:
         self.memory = memory_store
         self.settings = get_settings()
         
-        # URL local padrão do Ollama
-        self.api_url = "http://localhost:11434/api/chat"
+        # URL dinâmica configurada via .env (padrão: http://localhost:11434)
+        self.api_url = f"{self.settings.ollama_url}/api/chat"
         
         # Prepara as ferramentas no formato OpenAI/Ollama
         self.tools_schema = []
@@ -42,18 +42,20 @@ class OllamaOrchestrator:
         history = await self.memory.get_history(session_id)
         
         messages = []
-
+        
+        # System prompt otimizado para o modelo 3B (curto e direto)
         system_prompt = (
             "Você é o assistente virtual da Rango Já. "
             f"O cliente logado é o ID '{cliente_id}'. "
             "Seja educado, direto e resolva o problema do cliente usando as ferramentas. "
-            "Se o cliente reclamar de atraso, item faltante ou cancelamento, use 'solicitar_reembolso'. "
-            "Se a ferramenta retornar um erro de limite, use 'escalar_para_humano'. "
-            "Para dúvidas sobre regras (ex: Pix), use 'buscar_politicas'. "
-            "Escreva uma resposta final amigável e natural para o cliente."
+            "REGRA CRÍTICA 1: Se o cliente relatar que um item FALTOU, que houve ATRASO ou que o pedido foi CANCELADO, chame IMEDIATAMENTE a ferramenta 'solicitar_reembolso'. NÃO busque políticas para esses casos. "
+            "REGRA CRÍTICA 2: Se a ferramenta 'solicitar_reembolso' retornar um erro dizendo que o valor excede o limite, você DEVE chamar a ferramenta 'escalar_para_humano' imediatamente. "
+            "REGRA CRÍTICA 3: Se o cliente fizer perguntas gerais (como prazo de Pix, horários, etc), chame 'buscar_politicas' e copie EXATAMENTE o que está escrito no texto retornado. "
+            "REGRA CRÍTICA 4: Nunca prometa reembolsos sem usar as ferramentas."
         )
         messages.append({"role": "system", "content": system_prompt})
         
+        # Carrega histórico da memória
         for msg in history:
             role = "user" if msg.role == "user" else "assistant"
             messages.append({"role": role, "content": msg.content})
@@ -76,7 +78,7 @@ class OllamaOrchestrator:
                 data = None
                 for attempt in range(3):
                     try:
-                        logger.info(f"Chamando Ollama (Tentativa {attempt+1})...")
+                        logger.info(f"Chamando Ollama (Tentativa {attempt+1}) em {self.api_url}...")
                         response = await client.post(self.api_url, json=payload)
                         
                         # --- TRATAMENTO DE RATE LIMIT (429) ---
@@ -110,7 +112,7 @@ class OllamaOrchestrator:
                 message = data.get("message", {})
                 tool_calls = message.get("tool_calls", [])
                 
-                # Se não houver chamada de ferramenta, é a resposta final
+                # Se não houver chamada de ferramenta, é a resposta final para o cliente
                 if not tool_calls:
                     resposta_texto = message.get("content", resposta_texto)
                     break
