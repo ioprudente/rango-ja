@@ -45,6 +45,7 @@ class Order(BaseModel):
     def get_item_by_name(self, name: str) -> Optional[Item]:
         target = name.strip().lower()
         for item in self.itens:
-            if item.nome.strip().lower() == target:
+            # Agora ele aceita se o nome do item contiver a palavra buscada, ou vice-versa
+            if target in item.nome.strip().lower() or item.nome.strip().lower() in target:
                 return item
         return None

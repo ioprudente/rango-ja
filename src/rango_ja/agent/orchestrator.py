@@ -42,18 +42,16 @@ class OllamaOrchestrator:
         history = await self.memory.get_history(session_id)
         
         messages = []
-        
-        # --- AQUI ESTÁ O NOVO SYSTEM PROMPT BLINDADO ---
+
         system_prompt = (
             "Você é o assistente virtual da Rango Já. "
             f"O cliente logado é o ID '{cliente_id}'. "
             "Seja educado, direto e resolva o problema do cliente usando as ferramentas. "
-            "REGRA DE OURO 1: NUNCA invente regras ou prazos. "
-            "REGRA DE OURO 2: Se a ferramenta 'buscar_politicas' retornar um texto, você deve usar EXATAMENTE as palavras do texto para responder (ex: se o texto diz '2 dias úteis', você deve dizer '2 dias úteis'). "
-            "REGRA DE OURO 3: Nunca prometa reembolsos sem usar 'solicitar_reembolso'."
+            "Se o cliente reclamar de atraso, item faltante ou cancelamento, use 'solicitar_reembolso'. "
+            "Se a ferramenta retornar um erro de limite, use 'escalar_para_humano'. "
+            "Para dúvidas sobre regras (ex: Pix), use 'buscar_politicas'. "
+            "Escreva uma resposta final amigável e natural para o cliente."
         )
-        # -----------------------------------------------
-
         messages.append({"role": "system", "content": system_prompt})
         
         for msg in history:
