@@ -198,7 +198,6 @@ poetry run pytest
 
 *   **DeepSeek:** Utilizado para apoiar a estruturação da arquitetura, debugar problemas de integração de bibliotecas, auxiliar na lógica de domínio e regras de negócio, e formatar este documento.
 *   **GitHub Copilot:** Utilizado para autocompletar trechos repetitivos de *boilerplate* (schemas do Pydantic, declaração de variáveis).
-*   **Nota:** **Não utilizei o ChatGPT** em nenhuma etapa do desenvolvimento.
 
 ---
 
