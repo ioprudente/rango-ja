@@ -42,13 +42,18 @@ class OllamaOrchestrator:
         history = await self.memory.get_history(session_id)
         
         messages = []
+        
+        # --- AQUI ESTÁ O NOVO SYSTEM PROMPT BLINDADO ---
         system_prompt = (
             "Você é o assistente virtual da Rango Já. "
             f"O cliente logado é o ID '{cliente_id}'. "
             "Seja educado, direto e resolva o problema do cliente usando as ferramentas. "
-            "Nunca invente regras, use 'buscar_politicas'. "
-            "Nunca prometa reembolsos sem usar 'solicitar_reembolso'."
+            "REGRA DE OURO 1: NUNCA invente regras ou prazos. "
+            "REGRA DE OURO 2: Se a ferramenta 'buscar_politicas' retornar um texto, você deve usar EXATAMENTE as palavras do texto para responder (ex: se o texto diz '2 dias úteis', você deve dizer '2 dias úteis'). "
+            "REGRA DE OURO 3: Nunca prometa reembolsos sem usar 'solicitar_reembolso'."
         )
+        # -----------------------------------------------
+
         messages.append({"role": "system", "content": system_prompt})
         
         for msg in history:
@@ -75,19 +80,32 @@ class OllamaOrchestrator:
                     try:
                         logger.info(f"Chamando Ollama (Tentativa {attempt+1})...")
                         response = await client.post(self.api_url, json=payload)
+                        
+                        # --- TRATAMENTO DE RATE LIMIT (429) ---
+                        if response.status_code == 429:
+                            logger.warning("Rate limit (429) do Ollama atingido. Aguardando backoff exponencial...")
+                            await asyncio.sleep(2 ** attempt) 
+                            continue
+                            
+                        # Levanta exceção para outros erros HTTP (4xx, 5xx)
                         response.raise_for_status()
+                        
                         data = response.json()
-                        break
+                        break # Sucesso, sai do loop de retry
+                        
                     except httpx.ReadTimeout:
                         logger.warning(f"Timeout na tentativa {attempt + 1}.")
                         await asyncio.sleep(1)
+                    except httpx.HTTPStatusError as exc:
+                        logger.error(f"Erro HTTP no Ollama: {exc.response.status_code} - {exc.response.text}")
+                        await asyncio.sleep(1)
                     except Exception as exc:
-                        logger.error(f"Erro no Ollama: {exc}")
+                        logger.error(f"Erro inesperado na comunicação com Ollama: {exc}")
                         await asyncio.sleep(1)
                 
                 if not data:
                     return ChatResponse(
-                        resposta="O sistema está um pouco lento agora. Poderia tentar novamente em alguns instantes?",
+                        resposta="O sistema está um pouco sobrecarregado agora. Poderia tentar novamente em alguns instantes?",
                         acoes=executions
                     )
 
@@ -99,7 +117,7 @@ class OllamaOrchestrator:
                     resposta_texto = message.get("content", resposta_texto)
                     break
                 
-                # Adiciona a resposta da IA com as chamadas de ferramenta no histórico
+                # Adiciona a resposta da IA (com as chamadas de ferramenta) no histórico
                 messages.append(message)
                 
                 for tc in tool_calls:
@@ -107,7 +125,7 @@ class OllamaOrchestrator:
                     tool_name = func.get("name")
                     tool_args = func.get("arguments", {})
                     
-                    # O Ollama às vezes retorna os argumentos como string JSON, precisamos garantir que seja dict
+                    # O Ollama às vezes retorna os argumentos como string JSON
                     if isinstance(tool_args, str):
                         try:
                             tool_args = json.loads(tool_args)
@@ -118,8 +136,10 @@ class OllamaOrchestrator:
                     
                     if not tool_def:
                         result_str = json.dumps({"erro": "Ferramenta desconhecida"})
+                        executions.append(ToolCall(ferramenta=tool_name, argumentos=tool_args, resultado="erro"))
                     else:
                         try:
+                            # Validação Pydantic rigorosa dos argumentos gerados pelo LLM
                             args = tool_def.args_schema(**tool_args)
                             result_str = tool_def.func(cliente_id, args)
                             
@@ -131,6 +151,7 @@ class OllamaOrchestrator:
                                 )
                             )
                         except Exception as e:
+                            logger.error(f"Erro ao executar a ferramenta {tool_name}: {e}")
                             result_str = json.dumps({"erro": str(e)})
                             executions.append(ToolCall(ferramenta=tool_name, argumentos=tool_args, resultado="erro"))
 
