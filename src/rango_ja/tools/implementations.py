@@ -14,7 +14,7 @@ from rango_ja.domain.errors import (
     DuplicateRefund,
     ValueExceedsLimit,
 )
-from rango_ja.domain.models import Refund
+from rango_ja.domain.models import Refund, RefundReason
 from rango_ja.domain.refund import calculate_refund
 from rango_ja.domain.repository import get_repository
 from rango_ja.tools.schemas import (
@@ -76,23 +76,25 @@ def execute_request_refund(customer_id: str, args: RequestRefundArgs) -> str:
     except (OrderNotFound, OrderFromAnotherCustomer):
         return _format_error("Pedido não encontrado ou não pertence a você.")
 
+    # Converte a string enviada pelo Gemini de volta para o Enum
+    try:
+        reason_enum = RefundReason(args.motivo)
+    except ValueError:
+        return _format_error(f"Motivo '{args.motivo}' inválido. Use 'atraso', 'item_faltante' ou 'cancelamento_restaurante'.")
+
+    item_name = args.item if args.item else None
+
     try:
         result = calculate_refund(
             order=order,
-            reason=args.motivo,
-            item_name=args.item,
+            reason=reason_enum,
+            item_name=item_name,
         )
     except ValueExceedsLimit as e:
         return _format_error(
             f"O valor do reembolso é R$ {e.value:.2f}, o que excede o limite "
             f"automático de R$ {e.limit:.2f}. O caso precisa ser escalado para um atendente humano."
         )
-    except ClaimOutOfTimeframe as e:
-        return _format_error(str(e))
-    except DuplicateRefund as e:
-        return _format_error(str(e))
-    except (ItemNotFoundInOrder, UnsupportedReason) as e:
-        return _format_error(str(e))
     except DomainError as e:
         return _format_error(str(e))
 
@@ -133,5 +135,5 @@ def execute_search_policies(customer_id: str, args: SearchPoliciesArgs) -> str:
 
     return json.dumps({
         "politicas_completas": content,
-        "instrucao": "Responda à pergunta do cliente usando APENAS as informações acima. Se não estiver lá, diga que não sabe."
+        "instrucao": "Responda à pergunta do cliente usando APENAS as informações acima."
     }, ensure_ascii=False)

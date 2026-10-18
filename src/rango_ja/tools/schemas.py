@@ -1,6 +1,4 @@
-from typing import Optional
 from pydantic import BaseModel, Field
-from rango_ja.domain.models import RefundReason
 
 
 class ConsultOrderArgs(BaseModel):
@@ -17,12 +15,16 @@ class SearchPoliciesArgs(BaseModel):
 
 class RequestRefundArgs(BaseModel):
     pedido_id: str = Field(..., description="ID do pedido")
-    motivo: RefundReason = Field(..., description="Motivo do reembolso")
-    item: Optional[str] = Field(
-        None, description="Nome do item (obrigatório se motivo for item_faltante)"
+    motivo: str = Field(
+        ..., 
+        description="Motivo do reembolso. Valores permitidos: 'atraso', 'item_faltante', 'cancelamento_restaurante'."
+    )
+    item: str = Field(
+        "", 
+        description="Nome do item (obrigatório se motivo for item_faltante)"
     )
 
 
 class EscalateToHumanArgs(BaseModel):
-    pedido_id: Optional[str] = Field(None, description="ID do pedido, se aplicável")
+    pedido_id: str = Field("", description="ID do pedido, se aplicável")
     motivo: str = Field(..., description="Motivo do escalonamento")

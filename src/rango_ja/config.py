@@ -11,10 +11,10 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    # LLM
-    llm_provider: str = "openai"
+    # LLM (Gemini)
+    llm_provider: str = "gemini"
     llm_api_key: str = ""
-    llm_model: str = "gpt-4o-mini"
+    llm_model: str = "gemini-1.5-flash"
     llm_timeout_seconds: float = 30.0
     llm_max_retries: int = 2
 
@@ -22,7 +22,7 @@ class Settings(BaseSettings):
     max_agent_iterations: int = Field(default=6, ge=1, le=20)
     reference_datetime: str = "2026-10-10T21:00:00-03:00"
 
-    # Dados (caminhos relativos à raiz do projeto)
+    # Dados
     pedidos_path: str = "data/pedidos.json"
     politicas_path: str = "data/politicas.md"
 
