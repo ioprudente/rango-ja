@@ -1,17 +1,13 @@
 version: '3.8'
-
 services:
   api:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    container_name: fastapi_poetry_app
+    build: .
+    container_name: rango-ja
     ports:
       - "8000:8000"
-    volumes:
-      # Sincroniza sua pasta src local com o container
-      - ./src:/app/src
+    env_file:
+      - .env
     environment:
-      - ENV=development
-    # Sobrescreve o comando do Dockerfile para usar o --reload durante o desenvolvimento
-    command: poetry run uvicorn rango_ja.main:app --host 0.0.0.0 --port 8000 --reload
+      - OLLAMA_URL=http://host.docker.internal:11434
+    extra_hosts:
+      - "host.docker.internal:host-gateway"

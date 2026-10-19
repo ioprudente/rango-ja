@@ -47,7 +47,7 @@ poetry install
 
 2. Baixe o modelo no Ollama:
 ~~~bash
-ollama run llama3.2:3b
+ollama pull llama3.2:3b
 ~~~
 
 3. Crie o arquivo de variáveis de ambiente:
@@ -184,7 +184,7 @@ poetry run pytest
 
 **Limitações Conhecidas:**
 *   **Modelo 3B:** Por rodar na CPU, pode ocasionalmente alucinar termos textuais ou esquecer de preencher o JSON de parâmetros em loops secundários. No entanto, a validação Pydantic e o domínio impedem que ele quebre as regras ou execute transações erradas.
-*   **Persistência:** A memória e o log de ações residem na RAM. Se o servidor reiniciar, os dados são perdidos.
+*   **Persistência:** A memória da sessão reside em RAM, mas os logs de ações e o estado dos pedidos (reembolsos) são persistidos em arquivos JSON na pasta data/
 
 **O que faria diferente em Produção:**
 1.  **Infraestrutura:** Migraria para um modelo maior (ex: `gpt-4o`) para reduzir alucinações textuais e latência.
