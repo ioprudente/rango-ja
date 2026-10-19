@@ -1,7 +1,7 @@
 from fastapi import Depends
 
 from rango_ja.actions.base import ActionLog
-from rango_ja.actions.in_memory import InMemoryActionLog
+from rango_ja.actions.json_logger import JsonActionLog
 from rango_ja.agent.base import AgentOrchestrator
 from rango_ja.agent.orchestrator import OllamaOrchestrator
 from rango_ja.config import Settings, get_settings
@@ -10,7 +10,7 @@ from rango_ja.memory.in_memory import InMemoryMemoryStore
 
 # Instâncias globais (Singleton) para a API
 _memory_singleton: MemoryStore = InMemoryMemoryStore()
-_actions_singleton: ActionLog = InMemoryActionLog()
+_actions_singleton: ActionLog = JsonActionLog()
 _agent_singleton: AgentOrchestrator = OllamaOrchestrator(_memory_singleton)
 
 

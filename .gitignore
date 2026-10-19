@@ -20,3 +20,6 @@ env/
 
 # Sistema
 .DS_Store
+# Logs gerados em tempo de execução
+data/actions.json
+data/escalations.json
