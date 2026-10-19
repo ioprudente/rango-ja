@@ -57,7 +57,8 @@ class OllamaOrchestrator:
         messages.append({"role": "user", "content": mensagem})
 
         executions = []
-        resposta_texto = "Desculpe, não consegui concluir o atendimento."
+        resposta_texto = None
+        tool_results_cache = [] # Guarda os resultados caso o Ollama caia
 
         async with httpx.AsyncClient(timeout=self.settings.llm_timeout_seconds) as client:
             for iteration in range(self.settings.max_agent_iterations):
@@ -76,23 +77,35 @@ class OllamaOrchestrator:
                         if response.status_code == 429:
                             await asyncio.sleep(2 ** attempt) 
                             continue
-                        if response.status_code >= 400:
-                            return ChatResponse(resposta=f"Erro na API: {response.text}", acoes=executions)
+                        
+                        # Se o Ollama der erro 500 (Crash, OOM, EOF), tentamos novamente
+                        if response.status_code >= 500:
+                            logger.warning(f"Ollama instável (status {response.status_code}). Retentando...")
+                            await asyncio.sleep(2)
+                            continue
+                            
                         data = response.json()
                         break
-                    except httpx.ReadTimeout:
+                    except (httpx.ReadTimeout, httpx.ConnectError):
                         await asyncio.sleep(2)
-                    except Exception:
+                    except Exception as exc:
+                        logger.error(f"Erro de rede: {exc}")
                         await asyncio.sleep(1)
                 
                 if not data:
-                    return ChatResponse(resposta="O sistema está sobrecarregado.", acoes=executions)
+                    # --- FALLBACK SE O OLLAMA MORRER ---
+                    if tool_results_cache:
+                        # Se já executamos ferramentas, montamos a resposta manualmente
+                        resposta_texto = "O sistema demorou para processar a resposta final. Aqui estão os dados que consegui recuperar: " + json.dumps(tool_results_cache)
+                    else:
+                        resposta_texto = "O sistema está sobrecarregado agora. Por favor, tente novamente em alguns instantes."
+                    break
 
                 message = data.get("message", {})
                 tool_calls = message.get("tool_calls", [])
                 
                 if not tool_calls:
-                    resposta_texto = message.get("content", resposta_texto)
+                    resposta_texto = message.get("content", "Desculpe, não consegui processar sua resposta.")
                     break
                 
                 messages.append(message)
@@ -107,7 +120,6 @@ class OllamaOrchestrator:
                         try: tool_args = json.loads(tool_args)
                         except: tool_args = {}
 
-                    # --- GUARDRAILS ---
                     if tool_name == "buscar_politicas":
                         match = re.search(r'P\d{4}', mensagem, re.IGNORECASE)
                         if match:
@@ -136,13 +148,11 @@ class OllamaOrchestrator:
                     try:
                         args = tool_def.args_schema(**sanitized_args)
                         result_str = tool_def.func(cliente_id, args)
+                        tool_results_cache.append({"ferramenta": tool_name, "resultado": result_str})
                         
                         result_json = json.loads(result_str)
                         if "erro" in result_json:
                             erro_msg = result_json["erro"]
-                            
-                            # --- BLINDAGEM DO TESTE DO CENÁRIO 4 ---
-                            # Se o erro indica que escalou automaticamente, avisamos na lista de ações
                             if "escalado" in erro_msg.lower() or "excede o limite" in erro_msg.lower():
                                 executions.append(ToolCall(ferramenta="escalar_para_humano", argumentos={"pedido_id": sanitized_args.get("pedido_id", "")}, resultado="ok"))
                                 
@@ -163,6 +173,6 @@ class OllamaOrchestrator:
                     break
                     
         await self.memory.append(session_id, Message(role="user", content=mensagem))
-        await self.memory.append(session_id, Message(role="assistant", content=resposta_texto))
+        await self.memory.append(session_id, Message(role="assistant", content=resposta_texto or "Desculpe."))
 
-        return ChatResponse(resposta=resposta_texto, acoes=executions)
+        return ChatResponse(resposta=resposta_texto or "Desculpe.", acoes=executions)
