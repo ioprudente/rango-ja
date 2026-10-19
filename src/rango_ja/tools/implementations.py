@@ -18,7 +18,18 @@ def execute_consult_order(customer_id: str, args: ConsultOrderArgs) -> str:
         ensure_owner(order, customer_id)
     except (OrderNotFound, OrderFromAnotherCustomer):
         return _format_error("Pedido não encontrado ou não pertence a você.")
-    return json.dumps({"pedido_id": order.pedido_id, "status": order.status, "total": order.total, "previsto_para": order.previsto_para.isoformat() if order.previsto_para else None}, ensure_ascii=False)
+    
+    # CORREÇÃO: Retorna todos os dados exigidos (itens, taxa, horários)
+    return json.dumps({
+        "pedido_id": order.pedido_id,
+        "restaurante": order.restaurante,
+        "status": order.status,
+        "itens": [{"nome": i.nome, "preco": i.preco} for i in order.itens],
+        "taxa_entrega": order.taxa_entrega,
+        "total": order.total,
+        "previsto_para": order.previsto_para.isoformat() if order.previsto_para else None,
+        "entregue_em": order.entregue_em.isoformat() if order.entregue_em else None
+    }, ensure_ascii=False)
 
 def execute_list_orders(customer_id: str, args: ListOrdersArgs) -> str:
     orders = get_repository().list_by_customer(customer_id)
@@ -33,13 +44,19 @@ def execute_request_refund(customer_id: str, args: RequestRefundArgs) -> str:
         return _format_error("Pedido não encontrado ou não pertence a você.")
     
     try:
-        # Se o item for 'nao_aplicavel', passamos None
+        # CORREÇÃO: Captura o ValueError caso o LLM invente um motivo inválido
+        try:
+            reason = RefundReason(args.motivo)
+        except ValueError:
+            return _format_error(f"Motivo '{args.motivo}' inválido. Use 'atraso', 'item_faltante' ou 'cancelamento_restaurante'.")
+            
         item_name = args.item if args.item and args.item != "nao_aplicavel" else None
-        result = calculate_refund(order, RefundReason(args.motivo), item_name)
+        result = calculate_refund(order, reason, item_name)
     except ValueExceedsLimit as e:
-        motivo_escala = f"Reembolso de R$ {e.value:.2f} excede o limite."
+        motivo_escala = f"Reembolso de R$ {e.value:.2f} excede o limite. O caso foi escalado automaticamente."
         execute_escalate_to_human(customer_id, EscalateToHumanArgs(pedido_id=args.pedido_id, motivo=motivo_escala))
-        return _format_error(f"O valor excede o limite. O caso foi escalado AUTOMATICAMENTE para um atendente humano.")
+        # CORREÇÃO: Adiciona o prazo de 24h exigido pelo cenário 4
+        return _format_error(f"O valor excede o limite de R$ 50,00. O caso foi escalado automaticamente para um atendente humano, que responderá em até 24 horas.")
     except DomainError as e:
         return _format_error(str(e))
         
@@ -50,6 +67,15 @@ def execute_request_refund(customer_id: str, args: RequestRefundArgs) -> str:
     return json.dumps({"status": "aprovado", "valor": result.value}, ensure_ascii=False)
 
 def execute_escalate_to_human(customer_id: str, args: EscalateToHumanArgs) -> str:
+    repo = get_repository()
+    # CORREÇÃO: Valida se o pedido pertence ao cliente antes de escalar
+    if args.pedido_id:
+        try:
+            order = repo.get(args.pedido_id)
+            ensure_owner(order, customer_id)
+        except (OrderNotFound, OrderFromAnotherCustomer):
+            return _format_error("Pedido não encontrado ou não pertence a você.")
+
     log_path = Path("data/escalations.json")
     log_path.parent.mkdir(exist_ok=True)
     escalations = []
@@ -68,9 +94,13 @@ def execute_escalate_to_human(customer_id: str, args: EscalateToHumanArgs) -> st
 def execute_search_policies(customer_id: str, args: SearchPoliciesArgs) -> str:
     content = Path(get_settings().politicas_path).read_text(encoding="utf-8")
     sections = content.split("##")
+    
+    # CORREÇÃO: Melhora o RAG com pontuação por palavras-chave
     best_match = ""
     max_hits = 0
-    query_words = set(args.pergunta.lower().split())
+    # Remove palavras comuns (stopwords simples)
+    stopwords = {"o", "a", "os", "as", "de", "do", "da", "em", "um", "uma", "que", "e", "para", "com", "se", "meu"}
+    query_words = set(w.lower() for w in args.pergunta.replace("?", "").split() if w.lower() not in stopwords and len(w) > 2)
     
     for section in sections:
         hits = sum(1 for word in query_words if word in section.lower())
@@ -79,6 +109,6 @@ def execute_search_policies(customer_id: str, args: SearchPoliciesArgs) -> str:
             best_match = section
 
     if not best_match or max_hits == 0:
-        return _format_error("Política não encontrada.")
+        return _format_error("Política não encontrada para a sua dúvida.")
 
     return json.dumps({"trecho_relevante": f"##{best_match.strip()}"}, ensure_ascii=False)

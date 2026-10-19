@@ -18,21 +18,13 @@ class Refund(BaseModel):
     data: datetime
 
 class Order(BaseModel):
-    # extra="forbid" mantém a segurança contra campos maliciosos
-    # populate_by_name=True permite usar o nome do campo no Python
-    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+    model_config = ConfigDict(populate_by_name=True)
     
     pedido_id: str
     cliente_id: str
     restaurante: str
     status: str
-    
-    # AliasChoices resolve o problema: aceita "itens" ou "items" no JSON
-    itens: list[Item] = Field(
-        default_factory=list, 
-        validation_alias=AliasChoices("itens", "items")
-    )
-    
+    itens: list[Item] = Field(default_factory=list, validation_alias=AliasChoices("itens", "items"))
     taxa_entrega: float = 0.0
     total: float
     previsto_para: Optional[datetime] = None
@@ -46,7 +38,9 @@ class Order(BaseModel):
 
     def get_item_by_name(self, name: str) -> Optional[Item]:
         target = name.strip().lower()
+        target_words = set(target.split())
         for item in self.itens:
-            if target in item.nome.strip().lower() or item.nome.strip().lower() in target:
+            # Compara palavras inteiras. Evita que "a" case com tudo, mas acha "refrigerante" em "Refrigerante lata"
+            if target == item.nome.strip().lower() or target_words.issubset(set(item.nome.strip().lower().split())):
                 return item
         return None

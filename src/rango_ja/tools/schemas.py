@@ -12,7 +12,7 @@ class SearchPoliciesArgs(BaseModel):
 class RequestRefundArgs(BaseModel):
     pedido_id: str = Field(..., description="ID do pedido")
     motivo: str = Field(..., description="Motivo: 'atraso', 'item_faltante', 'cancelamento_restaurante'")
-    item: str = Field(..., description="Nome do item. Obrigatório para item_faltante, senão preencha com 'nao_aplicavel'")
+    item: str = Field("nao_aplicavel", description="Nome do item. Obrigatório para item_faltante, senão use 'nao_aplicavel'")
 
 class EscalateToHumanArgs(BaseModel):
     pedido_id: str = Field("", description="ID do pedido, se aplicável")

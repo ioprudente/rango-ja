@@ -35,7 +35,7 @@ def calculate_refund(order: Order, reason: RefundReason, item_name: str | None =
     elif reason is RefundReason.MISSING_ITEM:
         if order.status != "entregue":
             raise UnsupportedReason("O pedido ainda não foi entregue para avaliar item faltante.")
-        if not item_name: raise UnsupportedReason("item_faltante exige nome.")
+        if not item_name: raise DomainError("Informe o nome do item que faltou para prosseguir com o reembolso.")
         item = order.get_item_by_name(item_name)
         if not item: raise ItemNotFoundInOrder(order.pedido_id, item_name)
         value = round(item.preco, 2)
