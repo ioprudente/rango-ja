@@ -43,75 +43,15 @@ class OllamaOrchestrator:
         self.settings = get_settings()
         self.api_url = f"{self.settings.ollama_url}/api/chat"
         self._transport = transport
-        
-        self.tools_schema = [
-            {
-                "type": "function",
-                "function": {
-                    "name": "consultar_pedido",
-                    "description": "Consulta status, itens, valores e horários de UM pedido do cliente logado. Use para perguntas como 'onde está meu pedido'. Não altera nada.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "pedido_id": {"type": "string", "description": "ID do pedido (ex: P1001)"}
-                        },
-                        "required": ["pedido_id"]
-                    }
-                }
-            },
-            {
-                "type": "function",
-                "function": {
-                    "name": "listar_pedidos",
-                    "description": "Lista os pedidos recentes do cliente logado (use quando o cliente não informar o número do pedido).",
-                    "parameters": {"type": "object", "properties": {}}
-                }
-            },
-            {
-                "type": "function",
-                "function": {
-                    "name": "buscar_politicas",
-                    "description": "Busca nas políticas da Rango Já (prazos, reembolso, cupons, horários, alergias). Use para dúvidas gerais; nunca para reclamações de um pedido.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "pergunta": {"type": "string", "description": "Dúvida do cliente"}
-                        },
-                        "required": ["pergunta"]
-                    }
-                }
-            },
-            {
-                "type": "function",
-                "function": {
-                    "name": "solicitar_reembolso",
-                    "description": "Solicita reembolso de um pedido por atraso, item faltante ou cancelamento pelo restaurante. O VALOR é calculado pelo sistema.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "pedido_id": {"type": "string", "description": "ID do pedido"},
-                            "motivo": {"type": "string", "description": "Motivo: 'atraso', 'item_faltante' ou 'cancelamento_restaurante'"},
-                            "item": {"type": "string", "description": "Nome do item (apenas para item_faltante)"}
-                        },
-                        "required": ["pedido_id", "motivo"]
-                    }
-                }
-            },
-            {
-                "type": "function",
-                "function": {
-                    "name": "escalar_para_humano",
-                    "description": "Encaminha o caso a um atendente humano.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "pedido_id": {"type": "string", "description": "ID do pedido, se aplicável"},
-                            "motivo": {"type": "string", "description": "Motivo do escalonamento"}
-                        },
-                        "required": ["motivo"]
-                    }
-                }
-            }
+        self.tools_schema = self._build_schemas()
+
+    def _build_schemas(self) -> list[dict]:
+        return [
+            {"type": "function", "function": {"name": "consultar_pedido", "description": "Consulta status do pedido", "parameters": {"type": "object", "properties": {"pedido_id": {"type": "string"}}, "required": ["pedido_id"]}}},
+            {"type": "function", "function": {"name": "listar_pedidos", "description": "Lista pedidos", "parameters": {"type": "object", "properties": {}}}},
+            {"type": "function", "function": {"name": "buscar_politicas", "description": "Busca nas políticas", "parameters": {"type": "object", "properties": {"pergunta": {"type": "string"}}, "required": ["pergunta"]}}},
+            {"type": "function", "function": {"name": "solicitar_reembolso", "description": "Pede reembolso. O valor é calculado pelo sistema.", "parameters": {"type": "object", "properties": {"pedido_id": {"type": "string"}, "motivo": {"type": "string"}, "item": {"type": "string"}}, "required": ["pedido_id", "motivo"]}}},
+            {"type": "function", "function": {"name": "escalar_para_humano", "description": "Chama humano", "parameters": {"type": "object", "properties": {"pedido_id": {"type": "string"}, "motivo": {"type": "string"}}, "required": ["motivo"]}}}
         ]
 
     async def _chat(self, client: httpx.AsyncClient, payload: dict) -> dict:
@@ -121,49 +61,32 @@ class OllamaOrchestrator:
             try:
                 response = await client.post(self.api_url, json=payload)
             except (httpx.TimeoutException, httpx.TransportError) as exc:
-                logger.warning("llm_network_error attempt=%d error=%s", attempt + 1, type(exc).__name__)
+                logger.warning("llm_network_error attempt=%d", attempt + 1)
             else:
                 if response.status_code == 429 or response.status_code >= 500:
-                    logger.warning("llm_retryable_status attempt=%d status=%d body=%s", attempt + 1, response.status_code, response.text[:100])
+                    logger.warning("llm_retryable_status attempt=%d status=%d", attempt + 1, response.status_code)
                 elif response.status_code >= 400:
-                    logger.error("llm_client_error status=%d body=%s", response.status_code, response.text[:200])
                     raise _LLMUnavailable()
                 else:
-                    try:
-                        return response.json()
-                    except ValueError:
-                        logger.warning("llm_invalid_json attempt=%d", attempt + 1)
+                    return response.json()
             if attempt < attempts - 1:
                 await asyncio.sleep(wait)
         raise _LLMUnavailable()
 
-    @staticmethod
-    def _parse_args(raw: Any) -> dict:
-        if isinstance(raw, str):
-            try:
-                raw = json.loads(raw)
-            except json.JSONDecodeError:
-                return {}
-        return raw if isinstance(raw, dict) else {}
-
     def _run_tool(self, cliente_id: str, name: str | None, raw_args: Any) -> tuple[str, dict, dict]:
-        args_in = self._parse_args(raw_args)
+        args_in = raw_args if isinstance(raw_args, dict) else {}
         tool_def = TOOLS_MAP.get(name or "")
         if tool_def is None:
-            msg = f"Ferramenta '{name}' não existe. Ferramentas disponíveis: {', '.join(TOOLS_MAP)}."
+            msg = f"Ferramenta '{name}' não existe."
             return json.dumps({"erro": msg}), {"erro": msg}, args_in
 
         valid = tool_def.args_schema.model_fields.keys()
-        dropped = [k for k in args_in if k not in valid]
-        if dropped:
-            logger.warning("tool_args_dropped tool=%s dropped=%s", name, dropped)
         args_used = {k: v for k, v in args_in.items() if k in valid}
 
         try:
             parsed_args = tool_def.args_schema(**args_used)
         except ValidationError as exc:
-            detalhes = "; ".join(f"{'.'.join(map(str, e['loc']))}: {e['msg']}" for e in exc.errors())
-            msg = f"Argumentos inválidos para {name}: {detalhes}. Corrija e tente novamente."
+            msg = f"Argumentos inválidos para {name}: {exc.errors()}"
             return json.dumps({"erro": msg}, ensure_ascii=False), {"erro": msg}, args_used
 
         try:
@@ -173,8 +96,7 @@ class OllamaOrchestrator:
                 result = {"status": "ok", "dados": result}
             return result_str, result, args_used
         except Exception:
-            logger.exception("tool_failed tool=%s", name)
-            msg = "Erro interno ao executar a ferramenta."
+            msg = "Erro interno."
             return json.dumps({"erro": msg}), {"erro": msg}, args_used
 
     @staticmethod
@@ -204,8 +126,6 @@ class OllamaOrchestrator:
                 ok = "24" in text
             if not text or not ok:
                 return last["mensagem_cliente"]
-            if last["status"] == "escalado" and re.search(r"aprovad", text, re.IGNORECASE):
-                return last["mensagem_cliente"]
             return text
 
         errors = [r for r in results if "erro" in r and r.get("mensagem_cliente")]
@@ -215,40 +135,7 @@ class OllamaOrchestrator:
             return errors[-1]["mensagem_cliente"]
         return text or DEFAULT_REPLY
 
-    # NOVO: Fallback de Regex para quando o modelo imprime o JSON no texto
-    def _fallback_regex(self, text: str) -> dict | None:
-        """Tenta extrair uma ferramenta e argumentos se o modelo alucinou o JSON no texto."""
-        if not text or "{" not in text:
-            return None
-            
-        # Tenta achar um bloco JSON no texto
-        match = re.search(r'\{.*\}', text, re.DOTALL)
-        if not match:
-            return None
-            
-        try:
-            data = json.loads(match.group(0))
-        except json.JSONDecodeError:
-            return None
-
-        # Verifica se o JSON tem um nome de ferramenta válido
-        name = data.get("name") or data.get("function", {}).get("name")
-        if not name:
-            return None
-        if name not in TOOLS_MAP:
-            return None
-
-        # Extrai os argumentos
-        args = data.get("parameters") or data.get("function", {}).get("arguments") or data.get("arguments") or {}
-        
-        # Se ele apenas copiou o schema (ex: "properties"), não tem argumentos reais
-        if "properties" in args or not args:
-            return None
-
-        return {"name": name, "arguments": args}
-
     async def handle(self, *, cliente_id: str, session_id: str, mensagem: str) -> ChatResponse:
-        started = time.perf_counter()
         memory_key = f"{cliente_id}:{session_id}"
         history = await self.memory.get_history(memory_key)
 
@@ -268,7 +155,7 @@ class OllamaOrchestrator:
                     "messages": messages,
                     "tools": self.tools_schema,
                     "stream": False,
-                    "options": {"temperature": 0.0, "num_predict": 300, "num_ctx": 2048}, # Aumentado para 2048
+                    "options": {"temperature": 0.0, "num_predict": 300, "num_ctx": 2048},
                     "keep_alive": "30m",
                 }
                 try:
@@ -281,22 +168,27 @@ class OllamaOrchestrator:
                 tool_calls = message.get("tool_calls") or []
                 
                 if not tool_calls:
-                    text = message.get("content") or ""
-                    # Tenta o fallback de regex
-                    fallback = self._fallback_regex(text)
-                    if fallback:
-                        logger.info("fallback_regex ativado tool=%s", fallback["name"])
-                        tool_calls = [{"function": fallback}]
-                    else:
-                        final_text = text
-                        break
+                    final_text = message.get("content") or ""
+                    break
 
                 messages.append(message)
                 for tc in tool_calls:
                     fn = tc.get("function") or {}
                     name = fn.get("name")
+                    args = fn.get("arguments") or {}
+                    
+                    if isinstance(args, str):
+                        try: args = json.loads(args)
+                        except: args = {}
+
+                    # --- CORREÇÃO DO CENÁRIO 2: Extrai o item se o LLM esquecer ---
+                    if name == "solicitar_reembolso" and args.get("motivo") == "item_faltante" and not args.get("item"):
+                        match = re.search(r'faltou (?:o |a )?([a-zA-ZÀ-ÿ]+)', mensagem, re.IGNORECASE)
+                        if match:
+                            args["item"] = match.group(1)
+
                     t0 = time.perf_counter()
-                    result_str, result, args_used = self._run_tool(cliente_id, name, fn.get("arguments"))
+                    result_str, result, args_used = self._run_tool(cliente_id, name, args)
                     logger.info("tool_call session=%s tool=%s ok=%s ms=%d", session_id, name, "erro" not in result, (time.perf_counter() - t0) * 1000)
                     results.append(result)
                     executions += self._to_tool_calls(name or "desconhecida", args_used, result)
