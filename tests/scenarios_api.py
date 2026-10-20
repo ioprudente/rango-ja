@@ -102,7 +102,6 @@ def run_tests():
             print(f"Resposta do LLM: {data['resposta']}")
             print(f"Ferramentas chamadas: {json.dumps(data['acoes'], ensure_ascii=False)}")
             
-            # NOVA CHECAGEM: Se o Ollama caiu, o teste falha automaticamente
             if data['resposta'] == LLM_DOWN_REPLY:
                 print(f"[FALHOU] O Ollama caiu ou deu timeout. (Esperado: {scenario['expected']})")
                 failed += 1
