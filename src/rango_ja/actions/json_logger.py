@@ -1,28 +1,19 @@
-import json
-from pathlib import Path
-from datetime import datetime
 from rango_ja.actions.base import ActionLog, ActionRecord
+from rango_ja.actions.jsonfile import append_json_list, read_json_list
+from rango_ja.config import get_settings
 
 class JsonActionLog(ActionLog):
-    def __init__(self, filepath: str = "data/actions.json"):
-        self.filepath = Path(filepath)
-        self.filepath.parent.mkdir(parents=True, exist_ok=True)
+    """Log de auditoria das ações executadas (reembolsos aprovados e escaladas)."""
+    def __init__(self, filepath: str | None = None) -> None:
+        self._filepath = filepath
+
+    @property
+    def filepath(self) -> str:
+        return self._filepath or get_settings().actions_path
 
     async def record(self, record: ActionRecord) -> None:
-        # Se o arquivo não existir (porque o teste apagou), cria um novo
-        if not self.filepath.exists():
-            self.filepath.write_text("[]", encoding="utf-8")
-            
-        data = json.loads(self.filepath.read_text(encoding="utf-8"))
-        
-        record_dict = record.model_dump()
-        record_dict["registrado_em"] = record_dict["registrado_em"].isoformat()
-        data.append(record_dict)
-        
-        self.filepath.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+        entry = record.model_dump(mode="json")
+        append_json_list(self.filepath, entry)
 
     async def list_by_cliente(self, cliente_id: str) -> list[ActionRecord]:
-        if not self.filepath.exists():
-            return []
-        data = json.loads(self.filepath.read_text(encoding="utf-8"))
-        return [ActionRecord(**r) for r in data if r["cliente_id"] == cliente_id]
+        return [ActionRecord(**r) for r in read_json_list(self.filepath) if r["cliente_id"] == cliente_id]

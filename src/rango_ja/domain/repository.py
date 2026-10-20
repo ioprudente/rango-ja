@@ -6,9 +6,9 @@ from rango_ja.domain.errors import OrderNotFound
 from rango_ja.domain.models import Order
 
 class OrderRepository:
-    def __init__(self, orders_path: str) -> None:
+    def __init__(self, orders_path: str, state_path: str = "data/pedidos_state.json") -> None:
         self._path = Path(orders_path)
-        self._state_path = Path("data/pedidos_state.json")
+        self._state_path = Path(state_path)
         self._by_id: dict[str, Order] = {}
         self._by_customer: dict[str, list[Order]] = {}
         self._load()
@@ -55,4 +55,4 @@ class OrderRepository:
 
 @lru_cache
 def get_repository() -> OrderRepository:
-    return OrderRepository(get_settings().pedidos_path)
+    return OrderRepository(get_settings().pedidos_path, get_settings().state_path)
